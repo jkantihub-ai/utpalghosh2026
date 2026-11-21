@@ -4,6 +4,17 @@ import fs from 'fs';
 import path from 'path';
 import {defineConfig} from 'vite';
 
+const MIME_TYPES: Record<string, string> = {
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.png': 'image/png',
+  '.webp': 'image/webp',
+  '.svg': 'image/svg+xml',
+  '.pdf': 'application/pdf',
+  '.mov': 'video/mp4',
+  '.mp4': 'video/mp4',
+};
+
 export default defineConfig(() => {
   return {
     base: './',
@@ -28,20 +39,58 @@ export default defineConfig(() => {
           }
         },
       },
-      // Mirrors dist/ into docs/ with .nojekyll for GitHub Pages (/docs branch hosting).
+      // Serves docs/assets during Vite dev and copies them into dist/assets on build
+      // so both AI Studio preview and GitHub Pages (/docs) share one canonical media folder.
       {
-        name: 'sync-github-pages-docs',
-        apply: 'build',
+        name: 'share-docs-assets',
+        configureServer(server) {
+          server.middlewares.use('/assets', (req, res, next) => {
+            if (!req.url) return next();
+            const cleanRel = decodeURIComponent(req.url.split('?')[0]).replace(/^\/+/, '');
+            const docsAssetsRoot = path.resolve(__dirname, 'docs/assets');
+            const targetPath = path.resolve(docsAssetsRoot, cleanRel);
+            if (!targetPath.startsWith(docsAssetsRoot + path.sep)) return next();
+            if (!fs.existsSync(targetPath) || !fs.statSync(targetPath).isFile()) return next();
+
+            const stat = fs.statSync(targetPath);
+            const ext = path.extname(targetPath).toLowerCase();
+            const contentType = MIME_TYPES[ext] || 'application/octet-stream';
+            const range = req.headers.range;
+
+            if (range) {
+              const parts = range.replace(/bytes=/, '').split('-');
+              const start = parseInt(parts[0], 10);
+              const end = parts[1] ? parseInt(parts[1], 10) : stat.size - 1;
+              if (Number.isNaN(start) || Number.isNaN(end) || start > end || end >= stat.size) {
+                res.statusCode = 416;
+                res.end();
+                return;
+              }
+              res.statusCode = 206;
+              res.setHeader('Content-Range', `bytes ${start}-${end}/${stat.size}`);
+              res.setHeader('Accept-Ranges', 'bytes');
+              res.setHeader('Content-Length', String(end - start + 1));
+              res.setHeader('Content-Type', contentType);
+              fs.createReadStream(targetPath, {start, end}).pipe(res);
+              return;
+            }
+
+            res.statusCode = 200;
+            res.setHeader('Accept-Ranges', 'bytes');
+            res.setHeader('Content-Length', String(stat.size));
+            res.setHeader('Content-Type', contentType);
+            fs.createReadStream(targetPath).pipe(res);
+          });
+        },
         closeBundle(error?: Error): void {
           if (error) {
             return;
           }
           const distDir = path.resolve(__dirname, 'dist');
-          const docsDir = path.resolve(__dirname, 'docs');
-          if (fs.existsSync(distDir)) {
-            fs.rmSync(docsDir, {recursive: true, force: true});
-            fs.cpSync(distDir, docsDir, {recursive: true, force: true});
-            fs.writeFileSync(path.join(docsDir, '.nojekyll'), '');
+          const docsAssets = path.resolve(__dirname, 'docs/assets');
+          const distAssets = path.resolve(distDir, 'assets');
+          if (fs.existsSync(distDir) && fs.existsSync(docsAssets)) {
+            fs.cpSync(docsAssets, distAssets, {recursive: true, force: true});
           }
         },
       },
