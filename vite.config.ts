@@ -6,6 +6,7 @@ import {defineConfig} from 'vite';
 
 export default defineConfig(() => {
   return {
+    base: './',
     plugins: [
       react(),
       tailwindcss(),
@@ -24,6 +25,23 @@ export default defineConfig(() => {
           const distAssets = path.resolve(distDir, 'src/assets');
           if (fs.existsSync(distDir) && fs.existsSync(srcAssets)) {
             fs.cpSync(srcAssets, distAssets, {recursive: true, force: true});
+          }
+        },
+      },
+      // Mirrors dist/ into docs/ with .nojekyll for GitHub Pages (/docs branch hosting).
+      {
+        name: 'sync-github-pages-docs',
+        apply: 'build',
+        closeBundle(error?: Error): void {
+          if (error) {
+            return;
+          }
+          const distDir = path.resolve(__dirname, 'dist');
+          const docsDir = path.resolve(__dirname, 'docs');
+          if (fs.existsSync(distDir)) {
+            fs.rmSync(docsDir, {recursive: true, force: true});
+            fs.cpSync(distDir, docsDir, {recursive: true, force: true});
+            fs.writeFileSync(path.join(docsDir, '.nojekyll'), '');
           }
         },
       },
